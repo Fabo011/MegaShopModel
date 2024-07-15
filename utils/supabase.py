@@ -11,9 +11,10 @@ bucket_name = "megashopmodel"
 
 def upload_model_to_supabase(file_path, file_name):
     with open(file_path, "rb") as file:
-        response = supabase.storage.from_(bucket_name).upload(file_name, file)
-        print(response)
-        
-        if not (response.status_code == 200 or response.status_code == 201):
-            raise Exception(response.text)
+        try:
+            supabase.storage.from_(bucket_name).upload(file_name, file)
+            print('Models uploaded to Supabase!')
+        except Exception:
+            # Just for preventing the server from crash if the file is already uploaded
+            print("Model already uploaded to Supabase")
         
