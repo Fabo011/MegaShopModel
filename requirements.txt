@@ -4,3 +4,5 @@ numpy==2.0.0
 matplotlib==3.9.1
 scikit-learn==1.5.1
 joblib==1.4.2
+supabase==2.5.1
+python-dotenv==1.0.1 
