@@ -5,8 +5,10 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 from utils.supabase import upload_model_to_supabase
 from sklearn.metrics import silhouette_score
+from sklearn.decomposition import PCA
 import plotly.graph_objs as go
-from dash import Dash, dcc, html
+from dash import Dash, dcc, html, dash_table
+from matplotlib import cm
 
 # Step 1: Load Data
 data = pd.read_csv('data/mall_customers.csv')
@@ -21,14 +23,16 @@ X_scaled = scaler.fit_transform(X)
 
 # Step 4: Elbow Method
 wcss = []
-for i in range(1, 11):
-    kmeans = KMeans(n_clusters=i, init='k-means++', max_iter=300, n_init=10, random_state=42)
+silhouette_scores = []
+for i in range(2, 9):
+    kmeans = KMeans(n_clusters=i, init='k-means++', max_iter=300, n_init=51, random_state=42)
     kmeans.fit(X_scaled)
     wcss.append(kmeans.inertia_)
+    silhouette_scores.append(silhouette_score(X_scaled, kmeans.labels_))
 
-# Step 5: K-Means Clustering
-optimal_k = 5
-kmeans = KMeans(n_clusters=optimal_k, init='k-means++', max_iter=300, n_init=10, random_state=42)
+# Step 5: K-Means Clustering with optimal_k
+optimal_k = 4  # Based on the elbow method and silhouette scores, change this as needed
+kmeans = KMeans(n_clusters=optimal_k, init='k-means++', max_iter=300, n_init=51, random_state=42)
 kmeans.fit(X_scaled)
 
 # Step 6: Save the trained model
@@ -39,16 +43,19 @@ joblib.dump(scaler, 'scaler.pkl')
 clusters = kmeans.predict(X_scaled)
 data['Cluster'] = clusters
 
-# Calculate silhouette scores
-silhouette_scores = []
-cluster_range = range(2, 11)
+# Apply PCA for visualization
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
 
-for k in cluster_range:
-    kmeans = KMeans(n_clusters=k, init='k-means++', max_iter=300, n_init=10, random_state=42)
-    kmeans.fit(X_scaled)
-    clusters = kmeans.predict(X_scaled)
-    sil_score = silhouette_score(X_scaled, clusters)
-    silhouette_scores.append(sil_score)
+# Calculate mean values of features for each cluster
+cluster_means = data.groupby('Cluster')[features].mean().reset_index()
+
+# Assign colors to clusters
+num_clusters = len(cluster_means)
+colors = cm.rainbow(np.linspace(0, 1, num_clusters))
+color_map = {i: f'rgb({int(c[0]*255)}, {int(c[1]*255)}, {int(c[2]*255)})' for i, c in enumerate(colors)}
+data['Color'] = data['Cluster'].map(color_map)
+cluster_means['Color'] = cluster_means['Cluster'].map(color_map)
 
 # Step 8: Create Dash app
 app = Dash(__name__)
@@ -60,7 +67,7 @@ app.layout = html.Div([
         id='elbow-method',
         figure=go.Figure(
             data=go.Scatter(
-                x=list(range(1, 11)),
+                x=list(range(2, 9)),
                 y=wcss,
                 mode='lines+markers',
                 name='WCSS',
@@ -73,37 +80,67 @@ app.layout = html.Div([
     ),
 
     dcc.Graph(
-        id='clustering',
+        id='silhouette-score',
         figure=go.Figure(
             data=go.Scatter(
-                x=X_scaled[:, 0],
-                y=X_scaled[:, 1],
-                mode='markers',
-                marker=dict(color=clusters, colorscale='Viridis', showscale=True),
-                text=clusters,
-            )
-        ).update_layout(
-            title='K-Means Clustering of Mall Customers',
-            xaxis_title='Age (scaled)',
-            yaxis_title='Annual Income (scaled)'
-        )
-    ),
-
-    dcc.Graph(
-        id='silhouette-scores',
-        figure=go.Figure(
-            data=go.Scatter(
-                x=list(cluster_range),
+                x=list(range(2, 9)),
                 y=silhouette_scores,
                 mode='lines+markers',
                 name='Silhouette Score',
             )
         ).update_layout(
-            title='Silhouette Scores for Different Number of Clusters',
+            title='Silhouette Score for Optimal k',
             xaxis_title='Number of Clusters',
             yaxis_title='Silhouette Score'
         )
     ),
+
+    dcc.Graph(
+        id='clustering',
+        figure=go.Figure(
+            data=go.Scatter(
+                x=X_pca[:, 0],
+                y=X_pca[:, 1],
+                mode='markers',
+                marker=dict(color=data['Color'], showscale=True),
+                text=data['Cluster'],
+            )
+        ).update_layout(
+            title='K-Means Clustering of Mall Customers',
+            xaxis_title='Principal Component 1',
+            yaxis_title='Principal Component 2'
+        )
+    ),
+    
+    dash_table.DataTable(
+        id='cluster-means',
+        columns=[
+            {"name": col, "id": col} for col in cluster_means.columns if col != 'Color'
+        ],
+        data=cluster_means.to_dict('records'),
+        style_table={'overflowX': 'auto'},
+        style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
+        style_cell={'textAlign': 'center'},
+        style_data_conditional=[
+            {
+                'if': {'filter_query': '{{Cluster}} = {}'.format(i)},
+                'backgroundColor': color_map[i],
+                'color': 'black'
+            } for i in range(num_clusters)
+        ]
+    ),
+    
+    dash_table.DataTable(
+        id='customer-clusters',
+        columns=[{"name": col, "id": col} for col in ['customer_id', 'Cluster']],
+        data=data[['customer_id', 'Cluster']].to_dict('records'),
+        style_table={'overflowX': 'auto'},
+        style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
+        style_cell={'textAlign': 'center'},
+        page_size=10  # Display 10 rows per page
+    ),
+
+
 ], style={'text-align': 'center'})
 
 upload_model_to_supabase('kmeans_model.pkl', 'kmeans_model.pkl')
@@ -111,4 +148,3 @@ upload_model_to_supabase('scaler.pkl', 'scaler.pkl')
 
 if __name__ == '__main__':
     app.run_server(debug=True)
-
